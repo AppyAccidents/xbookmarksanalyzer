@@ -12,6 +12,7 @@ global.chrome = {
             addListener: jest.fn()
         },
         sendMessage: jest.fn(),
+        getURL: jest.fn(path => path),
         lastError: null
     },
     tabs: {

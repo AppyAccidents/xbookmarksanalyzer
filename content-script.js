@@ -12,13 +12,132 @@ class XBookmarkScanner {
     // Initialize Add to Analyzer button injection
     this.injectedButtons = new Set(); // Track which tweets have buttons
     this.initializeButtonInjection();
+
+    // Intercepted Data Cache
+    this.interceptedTweets = new Map(); // id -> tweetData
+    this.injectInterceptor();
+    this.setupInterceptorListener();
+  }
+
+  injectInterceptor() {
+    const script = document.createElement('script');
+    script.src = chrome.runtime.getURL('injected.js');
+    script.onload = function () {
+      this.remove();
+    };
+    (document.head || document.documentElement).appendChild(script);
+    console.log('[X Extractor] Injected network interceptor');
+  }
+
+  setupInterceptorListener() {
+    window.addEventListener('x-bookmarks-response', (event) => {
+      const { data } = event.detail;
+      this.processInterception(data);
+    });
+  }
+
+  processInterception(data) {
+    try {
+      // Traverse JSON to find tweet entries
+      const entries = this.findEntries(data);
+      let count = 0;
+
+      entries.forEach(entry => {
+        const tweetResult = entry.content?.itemContent?.tweet_results?.result;
+        if (tweetResult) {
+          const tweet = this.parseTweetFromAPI(tweetResult);
+          if (tweet && tweet.url) {
+            this.interceptedTweets.set(tweet.url, tweet);
+            count++;
+          }
+        }
+      });
+
+      if (count > 0) {
+        console.log(`[X Extractor] Intercepted ${count} tweets from API`);
+        this.sendProgress(`Intercepted ${count} new bookmarks from network.`);
+
+        // SIGNAL POPUP: Data loaded
+        chrome.runtime.sendMessage({
+          type: 'X_BOOKMARKS_LOADED',
+          count: count,
+          timestamp: Date.now()
+        }).catch(() => { });
+      }
+    } catch (e) {
+      console.error('[X Extractor] Error processing interception:', e);
+    }
+  }
+
+  findEntries(obj, entries = []) {
+    if (!obj || typeof obj !== 'object') return entries;
+
+    // Check if this is an instruction with entries
+    if (obj.entries && Array.isArray(obj.entries)) {
+      entries.push(...obj.entries);
+    }
+
+    // Recursive search
+    Object.values(obj).forEach(value => this.findEntries(value, entries));
+    return entries;
+  }
+
+  parseTweetFromAPI(result) {
+    try {
+      const legacy = result.legacy;
+      const core = result.core?.user_results?.result?.legacy;
+      const note = result.note_tweet?.note_tweet_results?.result?.text; // Long tweets
+
+      if (!legacy || !core) return null;
+
+      const id = legacy.id_str;
+      const username = core.screen_name;
+      const text = note || legacy.full_text || '';
+
+      // Extract Media
+      let media = [];
+      const mediaEntities = legacy.extended_entities?.media || legacy.entities?.media || [];
+
+      media = mediaEntities.map(m => {
+        let url = m.media_url_https;
+        let type = m.type; // 'photo', 'video', 'animated_gif'
+
+        // For videos/gifs, find the best bitrate variant
+        if (m.video_info && m.video_info.variants) {
+          const variants = m.video_info.variants
+            .filter(v => v.content_type === 'video/mp4')
+            .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+          if (variants.length > 0) {
+            url = variants[0].url;
+          }
+        }
+
+        return { type, url };
+      });
+
+      return {
+        url: `https://x.com/${username}/status/${id}`,
+        text: text,
+        displayName: core.name,
+        username: username,
+        dateTime: legacy.created_at, // "Wed Oct 10 20:19:24 +0000 2018"
+        likes: legacy.favorite_count?.toString() || '0',
+        retweets: legacy.retweet_count?.toString() || '0',
+        replies: legacy.reply_count?.toString() || '0',
+        views: result.views?.count?.toString() || '0',
+        media: media
+      };
+    } catch (e) {
+      return null;
+    }
   }
 
   async sendProgress(status) {
     try {
       chrome.runtime
         .sendMessage({ type: 'progressUpdate', status })
-        .catch(() => {});
+        .catch(() => { });
     } catch (e) {
       // ignore
     }
@@ -99,12 +218,27 @@ class XBookmarkScanner {
           const validation = this.validateBookmarkData(tweetData);
           if (validation.valid) {
             foundUrls.add(tweetData.url);
-            tweets.push(tweetData);
+
+            // Prefer intercepted data if available (it has better metrics/full text)
+            if (this.interceptedTweets.has(tweetData.url)) {
+              tweets.push(this.interceptedTweets.get(tweetData.url));
+            } else {
+              tweets.push(tweetData);
+            }
           } else {
             console.warn('[X Extractor] Invalid bookmark data:', validation.error, tweetData.url);
           }
         }
       }
+
+      // Add any intercepted tweets that weren't in the DOM (e.g. from previous pages/scrolls)
+      // This allows extracting "invisible" bookmarks if the API returned them
+      this.interceptedTweets.forEach((tweet, url) => {
+        if (!foundUrls.has(url)) {
+          foundUrls.add(url);
+          tweets.push(tweet);
+        }
+      });
 
       // Fallback: find all tweet links that weren't in articles
       if (useFallback) {
@@ -161,77 +295,77 @@ class XBookmarkScanner {
       const url = link ? link.href : '';
       if (!url) return { url: '' };
 
-    // Text - use array join for efficiency
-    const textEls = article.querySelectorAll('[data-testid="tweetText"]');
-    const textParts = [];
-    textEls.forEach(el => {
-      const text = el.textContent?.trim();
-      if (text) textParts.push(text);
-    });
-    const text = textParts.join(' ');
+      // Text - use array join for efficiency
+      const textEls = article.querySelectorAll('[data-testid="tweetText"]');
+      const textParts = [];
+      textEls.forEach(el => {
+        const text = el.textContent?.trim();
+        if (text) textParts.push(text);
+      });
+      const text = textParts.join(' ');
 
-    // Author display name & username
-    let displayName = '';
-    let username = '';
+      // Author display name & username
+      let displayName = '';
+      let username = '';
 
-    const header = article.querySelector('div[role="group"]')?.parentElement?.parentElement;
-    if (header) {
-      const spans = header.querySelectorAll('span');
-      if (spans.length > 0) displayName = spans[0].textContent?.trim() || '';
-      // Find username span
-      for (const span of spans) {
-        const spanText = span.textContent?.trim();
-        if (spanText && spanText.startsWith('@')) {
-          username = spanText.replace('@', '');
+      const header = article.querySelector('div[role="group"]')?.parentElement?.parentElement;
+      if (header) {
+        const spans = header.querySelectorAll('span');
+        if (spans.length > 0) displayName = spans[0].textContent?.trim() || '';
+        // Find username span
+        for (const span of spans) {
+          const spanText = span.textContent?.trim();
+          if (spanText && spanText.startsWith('@')) {
+            username = spanText.replace('@', '');
+            break;
+          }
+        }
+      }
+
+      // Fallback for display name
+      if (!displayName) {
+        const nameSpan = article.querySelector('div[dir="auto"] > span');
+        if (nameSpan) displayName = nameSpan.textContent?.trim() || '';
+      }
+
+      // Fallback for username
+      if (!username) {
+        const handleSpan = article.querySelector('div[dir="ltr"] > span');
+        if (handleSpan) {
+          username = handleSpan.textContent?.replace('@', '').trim() || '';
+        }
+      }
+
+      // Extract username from URL if still missing
+      if (!username && url) {
+        const match = url.match(/(?:x\.com|twitter\.com)\/([^\/]+)\/status/);
+        if (match) username = match[1];
+      }
+
+      // Date/time - single query
+      const timeEl = article.querySelector('time');
+      const dateTime = timeEl ? timeEl.getAttribute('datetime') || '' : '';
+
+      // Engagement metrics - PERFORMANCE: Query once and extract numbers more efficiently
+      const likeEl = article.querySelector('[data-testid="like"]');
+      const likes = likeEl ? this.extractNumber(likeEl.textContent) : '';
+
+      const retweetEl = article.querySelector('[data-testid="retweet"]');
+      const retweets = retweetEl ? this.extractNumber(retweetEl.textContent) : '';
+
+      const replyEl = article.querySelector('[data-testid="reply"]');
+      const replies = replyEl ? this.extractNumber(replyEl.textContent) : '';
+
+      // Views - OPTIMIZED: More targeted selector
+      let views = '';
+      const allEls = article.querySelectorAll('a[aria-label*="View"], span[aria-label*="View"]');
+      for (const el of allEls) {
+        const label = el.getAttribute('aria-label');
+        if (label && /view/i.test(label)) {
+          views = this.extractNumber(label);
           break;
         }
       }
-    }
-
-    // Fallback for display name
-    if (!displayName) {
-      const nameSpan = article.querySelector('div[dir="auto"] > span');
-      if (nameSpan) displayName = nameSpan.textContent?.trim() || '';
-    }
-
-    // Fallback for username
-    if (!username) {
-      const handleSpan = article.querySelector('div[dir="ltr"] > span');
-      if (handleSpan) {
-        username = handleSpan.textContent?.replace('@', '').trim() || '';
-      }
-    }
-
-    // Extract username from URL if still missing
-    if (!username && url) {
-      const match = url.match(/(?:x\.com|twitter\.com)\/([^\/]+)\/status/);
-      if (match) username = match[1];
-    }
-
-    // Date/time - single query
-    const timeEl = article.querySelector('time');
-    const dateTime = timeEl ? timeEl.getAttribute('datetime') || '' : '';
-
-    // Engagement metrics - PERFORMANCE: Query once and extract numbers more efficiently
-    const likeEl = article.querySelector('[data-testid="like"]');
-    const likes = likeEl ? this.extractNumber(likeEl.textContent) : '';
-
-    const retweetEl = article.querySelector('[data-testid="retweet"]');
-    const retweets = retweetEl ? this.extractNumber(retweetEl.textContent) : '';
-
-    const replyEl = article.querySelector('[data-testid="reply"]');
-    const replies = replyEl ? this.extractNumber(replyEl.textContent) : '';
-
-    // Views - OPTIMIZED: More targeted selector
-    let views = '';
-    const allEls = article.querySelectorAll('a[aria-label*="View"], span[aria-label*="View"]');
-    for (const el of allEls) {
-      const label = el.getAttribute('aria-label');
-      if (label && /view/i.test(label)) {
-        views = this.extractNumber(label);
-        break;
-      }
-    }
 
       return {
         url,
@@ -326,8 +460,8 @@ class XBookmarkScanner {
 
     // Observe the main timeline for new tweets
     const timeline = document.querySelector('div[aria-label="Timeline: Your Home Timeline"]') ||
-                     document.querySelector('main[role="main"]') ||
-                     document.body;
+      document.querySelector('main[role="main"]') ||
+      document.body;
 
     if (timeline) {
       observer.observe(timeline, {
@@ -473,8 +607,8 @@ class XBookmarkScanner {
 
     // Check for dark mode
     const isDark = document.documentElement.style.backgroundColor === 'rgb(0, 0, 0)' ||
-                   document.body.style.backgroundColor === 'rgb(0, 0, 0)' ||
-                   window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.body.style.backgroundColor === 'rgb(0, 0, 0)' ||
+      window.matchMedia('(prefers-color-scheme: dark)').matches;
 
     if (isDark) {
       dialog.style.background = 'rgb(21, 32, 43)';
@@ -663,4 +797,4 @@ class XBookmarkScanner {
 }
 
 // Initialize the scanner
-new XBookmarkScanner();if (typeof module !== 'undefined' && module.exports) { module.exports = { XBookmarkScanner }; }
+new XBookmarkScanner(); if (typeof module !== 'undefined' && module.exports) { module.exports = { XBookmarkScanner }; }

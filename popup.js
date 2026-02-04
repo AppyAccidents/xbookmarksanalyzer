@@ -21,6 +21,8 @@ class PopupController {
       aiAnalysis: null,
       apiKey: '',
       llmProvider: 'none', // 'openai', 'anthropic', 'none'
+      systemPrompt: '', // Custom system prompt
+      renderedCount: 50, // Infinite scroll
       searchQuery: '',
       filterOptions: {
         minLikes: 0,
@@ -98,43 +100,201 @@ class PopupController {
       analyzeAiBtn: document.getElementById('analyzeAiBtn'),
       exportMdBtn: document.getElementById('exportMdBtn'),
       exportCsvBtn: document.getElementById('exportCsvBtn'),
-      exportJsonBtn: document.getElementById('exportJsonBtn'),
-      exportHtmlBtn: document.getElementById('exportHtmlBtn'),
-      copyClipboardBtn: document.getElementById('copyClipboardBtn'),
       searchInput: document.getElementById('searchInput'),
       filterBtn: document.getElementById('filterBtn'),
-      sortBtn: document.getElementById('sortBtn'),
-      duplicatesBtn: document.getElementById('duplicatesBtn'),
-      metricsBtn: document.getElementById('metricsBtn'),
       mainContent: document.getElementById('mainContent'),
       closeBtn: document.getElementById('closeBtn'),
       settingsBtn: document.getElementById('settingsBtn'),
-      // NEW v0.10.0
       viewModeBtn: document.getElementById('viewModeBtn'),
-      collectionsBtn: document.getElementById('collectionsBtn'),
-      savedSearchesBtn: document.getElementById('savedSearchesBtn'),
       exportNotionBtn: document.getElementById('exportNotionBtn'),
       exportObsidianBtn: document.getElementById('exportObsidianBtn'),
       sentimentBtn: document.getElementById('sentimentBtn'),
       aiQABtn: document.getElementById('aiQABtn'),
-      // NEW v0.11.0
       authorAnalyticsBtn: document.getElementById('authorAnalyticsBtn'),
       hiddenGemsBtn: document.getElementById('hiddenGemsBtn'),
-      readingQueueBtn: document.getElementById('readingQueueBtn'),
-      trackEngagementBtn: document.getElementById('trackEngagementBtn'),
-      archiveDeletedBtn: document.getElementById('archiveDeletedBtn'),
-      // NEW v0.12.0
-      authorsTabBtn: document.getElementById('authorsTabBtn'),
-      mediaGalleryBtn: document.getElementById('mediaGalleryBtn'),
-      articleSummaryBtn: document.getElementById('articleSummaryBtn')
+      // Tabs
+      tabBtns: document.querySelectorAll('.tab-btn'),
+      tabContents: document.querySelectorAll('.tab-content'),
+      libraryContainer: document.getElementById('library-container')
     };
+
+    // Tab Event Listeners
+    this.elements.tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabName = btn.getAttribute('data-tab');
+        this.switchTab(tabName);
+      });
+    });
+  };
+
+  switchTab = (tabName) => {
+    this.elements.tabBtns.forEach(btn => {
+      if (btn.getAttribute('data-tab') === tabName) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    this.elements.tabContents.forEach(content => {
+      if (content.id === `tab-${tabName}`) {
+        content.classList.add('active');
+      } else {
+        content.classList.remove('active');
+      }
+    });
+
+    // Refresh library if switching to it
+    if (tabName === 'library') {
+      this.renderLibrary();
+    }
+  };
+
+  // Infinite Scroll Observer
+  setupIntersectionObserver = () => {
+    this.observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        this.renderLibrary(true); // Append mode
+      }
+    }, { root: null, rootMargin: '100px', threshold: 0.1 });
+  };
+
+  renderLibrary = (append = false) => {
+    const container = this.elements.libraryContainer;
+    if (!container) return;
+
+    if (!this.observer) this.setupIntersectionObserver();
+
+    const bookmarks = this.state.filteredBookmarks || this.state.lastExtraction;
+
+    // Empty state
+    if (!bookmarks || bookmarks.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state" style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--disabled-color); display: flex; flex-direction: column; align-items: center; gap: 16px;">
+          <div style="font-size: 48px;">🔍</div>
+          <p>No bookmarks found here.</p>
+          <button id="startScanBtn" class="action-button primary">Start New Scan</button>
+        </div>
+      `;
+      // Guided Empty State Listener
+      setTimeout(() => {
+        const startBtn = container.querySelector('#startScanBtn');
+        if (startBtn) {
+          startBtn.addEventListener('click', () => {
+            this.switchTab('scan');
+            // Optionally highlight the scan button or auto-start? 
+            // For now just switch.
+          });
+        }
+      }, 0);
+      return;
+    }
+
+    // Reset if not appending
+    if (!append) {
+      container.innerHTML = '';
+      this.state.renderedCount = 50;
+      window.scrollTo(0, 0); // Reset scroll
+    }
+
+    // Calculate range
+    const start = append ? document.querySelectorAll('.bookmark-card').length : 0;
+    const end = this.state.renderedCount;
+
+    // Check if we need to render more
+    const toRender = bookmarks.slice(start, end);
+
+    toRender.forEach(bookmark => {
+      const card = document.createElement('div');
+      card.className = 'bookmark-card';
+
+      // Find image
+      let bgImage = '';
+      if (bookmark.media && bookmark.media.length > 0) {
+        // Prefer image type
+        const img = bookmark.media.find(m => m.type === 'photo') || bookmark.media[0];
+        bgImage = `url('${img.media_url_https || img.url}')`;
+      }
+
+      card.innerHTML = `
+        <div class="card-media" style="${bgImage ? 'background-image: ' + bgImage : ''}">
+           ${!bgImage ? '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--disabled-color);font-size:24px;">📝</div>' : ''}
+           <div class="card-actions-overlay">
+             <div class="card-action-btn copy-btn" title="Copy Link">🔗</div>
+             <div class="card-action-btn collection-btn" title="Add to Collection">📂</div>
+             <div class="card-action-btn favorite-btn ${bookmark.favorite ? 'active' : ''}" title="Favorite">❤️</div>
+           </div>
+        </div>
+        <div class="card-content">
+          <div class="card-text">${bookmark.text}</div>
+          <div class="card-footer">
+            <span>@${bookmark.username}</span>
+            <span>❤️ ${bookmark.likes}</span>
+          </div>
+        </div>
+      `;
+
+      card.addEventListener('click', (e) => {
+        // Prevent opening if clicking an action button
+        if (e.target.closest('.card-action-btn')) return;
+        window.open(bookmark.url, '_blank');
+      });
+
+      // Quick Actions
+      const copyBtn = card.querySelector('.copy-btn');
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(bookmark.url);
+        this.showToast('Link copied to clipboard!', 'success');
+      });
+
+      const collectionBtn = card.querySelector('.collection-btn');
+      collectionBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.state.bulkSelection = [bookmark.url];
+        this.showCollectionsDialog();
+      });
+
+      const favoriteBtn = card.querySelector('.favorite-btn');
+      favoriteBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        bookmark.favorite = !bookmark.favorite;
+        favoriteBtn.classList.toggle('active');
+        // Persist change needed? Yes, but batch it or just rely on state?
+        // Ideally should save to storage.
+        // Quick dirty save:
+        await chrome.storage.local.set({ lastExtraction: this.state.lastExtraction });
+        this.showToast(bookmark.favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+      });
+
+      container.appendChild(card);
+    });
+
+    // Handle Sentinel (Infinite Scroll)
+    const existingSentinel = document.getElementById('infinite-scroll-sentinel');
+    if (existingSentinel) existingSentinel.remove();
+
+    if (this.state.renderedCount < bookmarks.length) {
+      const sentinel = document.createElement('div');
+      sentinel.id = 'infinite-scroll-sentinel';
+      sentinel.style.height = '20px';
+      sentinel.style.width = '100%';
+      // sentinel.textContent = 'Loading more...'; // Optional visual
+      container.appendChild(sentinel);
+
+      // Update state for NEXT render
+      this.state.renderedCount += 50;
+
+      // Observe
+      this.observer.observe(sentinel);
+    }
   };
 
   loadSettings = async () => {
     const settings = await chrome.storage.local.get([
       'settings', 'apiKey', 'llmProvider', 'bookmarkMetadata',
       'collections', 'savedSearches', 'viewMode', 'reminders',
-      'readingQueue', 'engagementHistory'
+      'readingQueue', 'engagementHistory', 'systemPrompt'
     ]);
     if (settings.settings) {
       this.state.isDarkMode = settings.settings.darkMode || false;
@@ -145,6 +305,9 @@ class PopupController {
     }
     if (settings.llmProvider) {
       this.state.llmProvider = settings.llmProvider;
+    }
+    if (settings.systemPrompt) {
+      this.state.systemPrompt = settings.systemPrompt;
     }
     // NEW v0.10.0
     if (settings.bookmarkMetadata) {
@@ -302,31 +465,17 @@ class PopupController {
     });
     this.elements.filterBtn?.addEventListener('click', () => this.showFilterDialog());
     this.elements.sortBtn?.addEventListener('click', () => this.showSortDialog());
-    this.elements.duplicatesBtn?.addEventListener('click', () => this.detectDuplicates());
-    this.elements.metricsBtn?.addEventListener('click', () => this.showMetricsDialog());
-
     // Settings and close
     this.elements.closeBtn?.addEventListener('click', () => window.close());
     this.elements.settingsBtn?.addEventListener('click', () => this.showSettingsDialog());
 
-    // NEW v0.10.0 - Additional features
     this.elements.viewModeBtn?.addEventListener('click', () => this.toggleViewMode());
-    this.elements.collectionsBtn?.addEventListener('click', () => this.showCollectionsDialog());
-    this.elements.savedSearchesBtn?.addEventListener('click', () => this.showSavedSearchesDialog());
     this.elements.exportNotionBtn?.addEventListener('click', () => this.downloadNotion());
     this.elements.exportObsidianBtn?.addEventListener('click', () => this.downloadObsidian());
     this.elements.sentimentBtn?.addEventListener('click', () => this.showSentimentAnalysis());
     this.elements.aiQABtn?.addEventListener('click', () => this.showAIQADialog());
-    // NEW v0.11.0
     this.elements.authorAnalyticsBtn?.addEventListener('click', () => this.showAuthorAnalytics());
     this.elements.hiddenGemsBtn?.addEventListener('click', () => this.showHiddenGems());
-    this.elements.readingQueueBtn?.addEventListener('click', () => this.showReadingQueue());
-    this.elements.trackEngagementBtn?.addEventListener('click', () => this.trackAllEngagements());
-    this.elements.archiveDeletedBtn?.addEventListener('click', () => this.archiveDeletedTweets());
-    // NEW v0.12.0
-    this.elements.authorsTabBtn?.addEventListener('click', () => this.showAuthorsDashboard());
-    this.elements.mediaGalleryBtn?.addEventListener('click', () => this.showMediaGallery());
-    this.elements.articleSummaryBtn?.addEventListener('click', () => this.showArticleSummaryDialog());
 
     // Listen for messages from content script
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -346,15 +495,10 @@ class PopupController {
     const hasData = this.state.lastExtraction && this.state.lastExtraction.length > 0;
     if (this.elements.exportMdBtn) this.elements.exportMdBtn.disabled = !hasData;
     if (this.elements.exportCsvBtn) this.elements.exportCsvBtn.disabled = !hasData;
-    if (this.elements.exportJsonBtn) this.elements.exportJsonBtn.disabled = !hasData;
-    if (this.elements.exportHtmlBtn) this.elements.exportHtmlBtn.disabled = !hasData;
-    if (this.elements.copyClipboardBtn) this.elements.copyClipboardBtn.disabled = !hasData;
     if (this.elements.analyzeAiBtn) this.elements.analyzeAiBtn.disabled = !hasData;
-    // NEW v0.10.0
     if (this.elements.exportNotionBtn) this.elements.exportNotionBtn.disabled = !hasData;
     if (this.elements.exportObsidianBtn) this.elements.exportObsidianBtn.disabled = !hasData;
   };
-
   updateProgressBar = () => {
     const { current, total } = this.state.progress;
     if (total > 0) {
@@ -386,11 +530,48 @@ class PopupController {
     document.body.setAttribute('data-theme', this.state.isDarkMode ? 'dark' : 'light');
   };
 
-  updateStatus = (message) => {
+  updateStatus = (message, type = 'info') => {
+    // Legacy support for status bar
     if (this.elements.statusBar) {
       this.elements.statusBar.textContent = message;
       this.elements.statusBar.setAttribute('aria-label', message);
     }
+
+    // Toast notification for user feedback
+    this.showToast(message, type);
+  };
+
+  showToast = (message, type = 'info') => {
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'toast-container';
+      document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    // Icon based on type
+    let icon = '';
+    if (type === 'success') icon = '✅';
+    else if (type === 'error') icon = '❌';
+    else if (type === 'warning') icon = '⚠️';
+    else icon = 'ℹ️';
+
+    toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+    container.appendChild(toast);
+
+    // Remove after 3 seconds
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      toast.addEventListener('animationend', () => {
+        toast.remove();
+        if (container.children.length === 0) {
+          container.remove();
+        }
+      });
+    }, 3000);
   };
 
   updateExtractionStatus = (timestamp) => {
@@ -539,6 +720,9 @@ class PopupController {
     }
 
     this.updateUI();
+
+    // Switch to library tab to show results
+    this.switchTab('library');
 
     // Automatically analyze with AI if provider is configured and API key is set (or if using LLM-free mode)
     if (bookmarks.length > 0) {
@@ -699,12 +883,32 @@ class PopupController {
                 allBookmarks.set(bookmark.url, bookmark);
               });
 
-              // Send progress update
+              // Progress update
               console.log(`[X Extractor] Extracted ${allBookmarks.size} bookmarks so far...`);
 
-              // Scroll down
-              window.scrollTo(0, document.body.scrollHeight);
-              await new Promise(r => setTimeout(r, scrollDelay));
+              // Smart Scroll: Wait for network activity or timeout
+              const previousHeight = document.body.scrollHeight;
+              window.scrollTo(0, previousHeight);
+
+              // Wait for either network response or timeout
+              await new Promise(resolve => {
+                let resolved = false;
+                const timeoutId = setTimeout(() => {
+                  if (!resolved) { resolved = true; resolve(); }
+                }, 4000); // 4s timeout (fallback)
+
+                const handler = () => {
+                  if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeoutId);
+                    window.removeEventListener('x-bookmarks-response', handler);
+                    // Add small delay for render
+                    setTimeout(resolve, 500);
+                  }
+                };
+
+                window.addEventListener('x-bookmarks-response', handler);
+              });
 
               const newHeight = document.body.scrollHeight;
               if (newHeight === lastHeight) {
@@ -822,15 +1026,17 @@ class PopupController {
 
   createLLMProvider = () => {
     switch (this.state.llmProvider) {
-      case 'openai':
-        return new OpenAIProvider(this.state.apiKey, this.constants);
-      case 'anthropic':
-        return new AnthropicProvider(this.state.apiKey, this.constants);
       case 'gemini':
-        return new GeminiProvider(this.state.apiKey, this.constants);
+        // Assuming GeminiProvider is globally available or imported
+        return new GeminiProvider(this.state.apiKey, this.state.systemPrompt);
+      case 'openai':
+        return new OpenAIProvider(this.state.apiKey, this.state.systemPrompt);
+      case 'anthropic':
+        return new AnthropicProvider(this.state.apiKey, this.state.systemPrompt);
       case 'none':
-      default:
         return new LLMFreeProvider(this.constants);
+      default:
+        throw new Error('Unknown LLM provider');
     }
   };
 
@@ -1045,6 +1251,16 @@ class PopupController {
         </label>
         <small id="apiKeyHelp" style="color: var(--disabled-color);"></small>
       </div>
+      
+      <div id="systemPromptSection" style="margin-bottom: 24px;">
+        <label style="display: block; margin-bottom: 8px; color: var(--text-color);">
+          System Prompt (Optional):
+          <textarea id="systemPromptInput" 
+                 placeholder="Custom instructions for the AI (e.g., 'Focus on technical details', 'Summarize as bullet points'). Default is 'You are a helpful assistant...'"
+                 style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); min-height: 80px; resize: vertical;">${this.state.systemPrompt || ''}</textarea>
+        </label>
+        <small style="color: var(--disabled-color);">Override the default AI personality and instructions.</small>
+      </div>
 
       <div style="display: flex; gap: 8px; justify-content: flex-end;">
         <button id="cancelBtn" style="padding: 8px 16px; border: 1px solid var(--border-color); background: transparent; color: var(--text-color); border-radius: 4px; cursor: pointer;">Cancel</button>
@@ -1060,6 +1276,10 @@ class PopupController {
       const apiKeySection = document.getElementById('apiKeySection');
       const apiKeyLabel = document.getElementById('apiKeyLabel');
       const apiKeyHelp = document.getElementById('apiKeyHelp');
+      const systemPromptSection = document.getElementById('systemPromptSection');
+
+      // System Prompt only applicable for LLMs
+      systemPromptSection.style.display = provider === 'none' ? 'none' : 'block';
 
       if (provider === 'none') {
         apiKeySection.style.display = 'none';
@@ -1073,7 +1293,7 @@ class PopupController {
           apiKeyHelp.innerHTML = 'Get your API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color: var(--primary-color);">Anthropic Console</a>';
         } else if (provider === 'gemini') {
           apiKeyLabel.textContent = 'Gemini API Key (Recommended):';
-          apiKeyHelp.innerHTML = 'Free to use! Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary-color);">Google AI Studio</a>.';
+          apiKeyHelp.innerHTML = 'Free to use! Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary-color);">Google AI Studio</a>';
         }
       }
     };
@@ -1149,6 +1369,7 @@ class PopupController {
     document.getElementById('saveBtn').addEventListener('click', async () => {
       const provider = document.getElementById('providerSelect').value;
       const apiKey = document.getElementById('apiKeyInput').value.trim();
+      const systemPrompt = document.getElementById('systemPromptInput').value.trim();
 
       // Validate API key before saving (only if provider requires it)
       if (provider !== 'none' && apiKey.length > 0) {
@@ -1172,9 +1393,16 @@ class PopupController {
         }
       }
 
-      // Save provider and API key
+      // Save provider, API key, and prompt
       this.state.llmProvider = provider;
-      await chrome.storage.local.set({ llmProvider: provider });
+      this.state.systemPrompt = systemPrompt;
+
+      const storageData = {
+        llmProvider: provider,
+        systemPrompt: systemPrompt
+      };
+
+      await chrome.storage.local.set(storageData);
 
       if (provider !== 'none') {
         await this.saveApiKey(apiKey);
@@ -1256,6 +1484,16 @@ class PopupController {
 
       // Link
       mdParts.push(`**Link:** ${bookmark.url}\n\n`);
+
+      // Media Links (High Quality)
+      if (bookmark.media && bookmark.media.length > 0) {
+        mdParts.push(`**Media:**\n`);
+        bookmark.media.forEach(m => {
+          mdParts.push(`- [${m.type === 'video' ? 'Video (MP4)' : 'Image (Original)'}](${m.url})\n`);
+        });
+        mdParts.push(`\n`);
+      }
+
       mdParts.push(`---\n\n`);
     });
 
@@ -1324,9 +1562,15 @@ class PopupController {
 
     const rows = [];
 
+    // Helper to format media links
+    const formatMedia = (media) => {
+      if (!media || media.length === 0) return '';
+      return media.map(m => m.url).join('; ');
+    };
+
     // Header row
     if (this.state.aiAnalysis) {
-      rows.push('Author,Username,Date,Text,Likes,Retweets,Replies,Views,Link,Tags,Categories');
+      rows.push('Author,Username,Date,Text,Likes,Retweets,Replies,Views,Link,Media URLs,Tags,Categories');
       const tags = this.state.aiAnalysis.tags ? this.state.aiAnalysis.tags.join('; ') : '';
       const categories = this.state.aiAnalysis.categories ? this.state.aiAnalysis.categories.join('; ') : '';
 
@@ -1341,12 +1585,13 @@ class PopupController {
           escapeCSV(t.replies || ''),
           escapeCSV(t.views || ''),
           escapeCSV(t.url),
+          escapeCSV(formatMedia(t.media)),
           escapeCSV(tags),
           escapeCSV(categories)
         ].join(','));
       });
     } else {
-      rows.push('Author,Username,Date,Text,Likes,Retweets,Replies,Views,Link');
+      rows.push('Author,Username,Date,Text,Likes,Retweets,Replies,Views,Link,Media URLs');
       bookmarks.forEach(t => {
         rows.push([
           escapeCSV(t.displayName || ''),
@@ -1357,7 +1602,8 @@ class PopupController {
           escapeCSV(t.retweets || ''),
           escapeCSV(t.replies || ''),
           escapeCSV(t.views || ''),
-          escapeCSV(t.url)
+          escapeCSV(t.url),
+          escapeCSV(formatMedia(t.media))
         ].join(','));
       });
     }
@@ -3322,6 +3568,9 @@ class PopupController {
         bookmarks: this.state.lastExtraction
       }
     });
+    this.updateStatus(`Deleted ${this.state.bulkSelection.length} bookmarks`);
+    this.state.bulkSelection = [];
+    this.updateUI();
     this.updateStatus(`Deleted ${this.state.bulkSelection.length} bookmarks`);
     this.state.bulkSelection = [];
     this.updateUI();
