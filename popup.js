@@ -53,8 +53,11 @@ class PopupController {
       undoStack: [], // History stack for undo
       redoStack: [], // History stack for redo
       readingQueue: [], // { bookmarkUrl, priority, addedDate }
-      engagementHistory: {} // { url: [{ timestamp, likes, retweets, replies, views }] }
+      engagementHistory: {}, // { url: [{ timestamp, likes, retweets, replies, views }] }
+      analysisStatus: 'ready',
+      analysisStatus: 'ready',
     };
+
 
     this.constants = {
       BATCH_SIZE: 100,
@@ -205,6 +208,11 @@ class PopupController {
       // Anthropic API keys start with 'sk-ant-'
       if (!trimmedKey.startsWith('sk-ant-')) {
         return { valid: false, error: 'Invalid API key format. Anthropic keys start with "sk-ant-"' };
+      }
+    } else if (provider === 'gemini') {
+      // Gemini API keys usually start with 'AIza'
+      if (!trimmedKey.startsWith('AIza')) {
+        return { valid: false, error: 'Invalid API key format. Gemini keys usually start with "AIza"' };
       }
     }
 
@@ -546,7 +554,7 @@ class PopupController {
 
   handleScan = () => {
     this.updateStatus('Quick scanning visible bookmarks only...');
-    chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
       chrome.tabs.sendMessage(tabs[0].id, {
         action: 'scanBookmarks'
       }, (response) => {
@@ -565,7 +573,7 @@ class PopupController {
 
   handleAutoScroll = () => {
     this.updateStatus('🔄 Auto-scrolling to load all bookmarks... (this may take a minute)');
-    chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
       const tabId = tabs[0].id;
 
       // Inject progressive scroll & scan script
@@ -818,6 +826,8 @@ class PopupController {
         return new OpenAIProvider(this.state.apiKey, this.constants);
       case 'anthropic':
         return new AnthropicProvider(this.state.apiKey, this.constants);
+      case 'gemini':
+        return new GeminiProvider(this.state.apiKey, this.constants);
       case 'none':
       default:
         return new LLMFreeProvider(this.constants);
@@ -1008,6 +1018,7 @@ class PopupController {
       <option value="none" ${this.state.llmProvider === 'none' ? 'selected' : ''}>None (LLM-free mode)</option>
       <option value="openai" ${this.state.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
       <option value="anthropic" ${this.state.llmProvider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option>
+      <option value="gemini" ${this.state.llmProvider === 'gemini' ? 'selected' : ''}>Google Gemini (Free Tier Available)</option>
     `;
 
     dialogContent.innerHTML = `
@@ -1020,7 +1031,10 @@ class PopupController {
             ${providerOptions}
           </select>
         </label>
-        <small style="color: var(--disabled-color);">Choose an LLM provider or use LLM-free mode for basic analysis</small>
+        <small style="color: var(--disabled-color);">
+          <strong>Free & Private:</strong> Bring your own API key to analyze bookmarks. 
+          Google Gemini has a generous free tier. Your key is stored locally.
+        </small>
       </div>
 
       <div id="apiKeySection" style="margin-bottom: 16px; ${this.state.llmProvider === 'none' ? 'display: none;' : ''}">
@@ -1057,6 +1071,9 @@ class PopupController {
         } else if (provider === 'anthropic') {
           apiKeyLabel.textContent = 'Anthropic API Key:';
           apiKeyHelp.innerHTML = 'Get your API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color: var(--primary-color);">Anthropic Console</a>';
+        } else if (provider === 'gemini') {
+          apiKeyLabel.textContent = 'Gemini API Key (Recommended):';
+          apiKeyHelp.innerHTML = 'Free to use! Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary-color);">Google AI Studio</a>.';
         }
       }
     };
@@ -1407,7 +1424,7 @@ class PopupController {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         console.log('[Clipboard] Using Clipboard API');
         await navigator.clipboard.writeText(md);
-        this.updateStatus(`✓ Copied ${bookmarkCount} bookmark${bookmarkCount !== 1 ? 's' : ''} to clipboard! (${Math.round(md.length/1024)}KB)`);
+        this.updateStatus(`✓ Copied ${bookmarkCount} bookmark${bookmarkCount !== 1 ? 's' : ''} to clipboard! (${Math.round(md.length / 1024)}KB)`);
         console.log('[Clipboard] ✓ Successfully copied using Clipboard API');
 
         // Verify it was actually copied
@@ -3005,6 +3022,89 @@ class PopupController {
     input.focus();
   };
 
+  // SUBSCRIPTION & QUOTA UI
+  updateSubscriptionUI = () => {
+    const { isPro } = this.state.quota;
+
+    if (isPro) {
+      if (this.elements.upgradeBtn) this.elements.upgradeBtn.style.display = 'none';
+      if (this.elements.subscriptionStatus) {
+        this.elements.subscriptionStatus.style.display = 'block';
+        this.elements.subscriptionStatus.textContent = '🌟 Pro Plan Active (Unlimited Analysis)';
+      }
+    } else {
+      if (this.elements.upgradeBtn) {
+        this.elements.upgradeBtn.style.display = 'block';
+        this.elements.upgradeBtn.textContent = `👑 Upgrade to Pro (${this.state.quota.count}/${this.state.quota.limit} used today)`;
+      }
+      if (this.elements.subscriptionStatus) this.elements.subscriptionStatus.style.display = 'none';
+    }
+  };
+
+  handleUpgrade = () => {
+    const dialog = document.createElement('div');
+    dialog.className = 'modal-overlay';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <span class="modal-icon">👑</span>
+        <h2 class="modal-title">Upgrade to Pro</h2>
+        <p class="modal-text">
+          Unlock unlimited AI analysis and advanced features!<br>
+          Current Plan: 10 bookmarks/day<br>
+          Pro Plan: Unlimited
+        </p>
+        <div class="modal-actions">
+          <button id="confirmUpgradeBtn" class="modal-primary-btn">Unlock Now ($9.99)</button>
+          <button id="cancelUpgradeBtn" class="modal-secondary-btn">Maybe Later</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    document.getElementById('confirmUpgradeBtn').onclick = async () => {
+      await this.subscriptionManager.upgrade();
+      this.state.quota.isPro = true;
+      this.updateSubscriptionUI();
+      document.body.removeChild(dialog);
+      this.updateStatus('🌟 Upgraded to Pro! Enjoy unlimited access.');
+    };
+
+    document.getElementById('cancelUpgradeBtn').onclick = () => {
+      document.body.removeChild(dialog);
+    };
+  };
+
+  showLimitReachedModal = () => {
+    const dialog = document.createElement('div');
+    dialog.className = 'modal-overlay';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <span class="modal-icon">🛑</span>
+        <h2 class="modal-title">Daily Limit Reached</h2>
+        <p class="modal-text">
+          You have reached your daily limit of ${this.quotaManager.DAILY_LIMIT} AI analyses.<br>
+          Upgrade to Pro for unlimited access or come back tomorrow!
+        </p>
+        <div class="modal-actions">
+          <button id="limitUpgradeBtn" class="modal-primary-btn">Upgrade to Pro</button>
+          <button id="limitCloseBtn" class="modal-secondary-btn">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    document.getElementById('limitUpgradeBtn').onclick = () => {
+      document.body.removeChild(dialog);
+      this.handleUpgrade();
+    };
+
+    document.getElementById('limitCloseBtn').onclick = () => {
+      document.body.removeChild(dialog);
+    };
+  };
+
   // FEATURE: Find Similar Bookmarks
   findSimilarBookmarks = (bookmarkUrl) => {
     const targetBookmark = this.state.lastExtraction?.find(b => b.url === bookmarkUrl);
@@ -3923,6 +4023,77 @@ Respond in JSON format:
       return this.validateAnalysis(analysis);
     } catch (error) {
       console.error('Anthropic Analysis error:', error);
+      throw error;
+    }
+  }
+}
+
+// Gemini Provider
+class GeminiProvider extends LLMProvider {
+  constructor(apiKey, constants) {
+    super(constants);
+    this.apiKey = apiKey;
+    this.apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+  }
+
+  async analyzeBookmarks(bookmarks) {
+    const bookmarkTexts = this.prepareBookmarkTexts(bookmarks);
+
+    if (!bookmarkTexts) {
+      throw new Error('No bookmark content to analyze');
+    }
+
+    const prompt = `Analyze these Twitter/X bookmarks and provide:
+1. An overall summary (2-3 sentences) of the main themes
+2. A list of 5-10 relevant tags/keywords
+3. 3-5 main categories these bookmarks fall into
+
+Bookmarks:
+${bookmarkTexts}
+
+Respond in JSON format:
+{
+  "overallSummary": "...",
+  "tags": ["tag1", "tag2", ...],
+  "categories": ["category1", "category2", ...]
+}`;
+
+    try {
+      const response = await fetch(`${this.apiUrl}?key=${this.apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: prompt
+            }]
+          }],
+          generationConfig: {
+            temperature: this.constants.AI_TEMPERATURE,
+            maxOutputTokens: this.constants.AI_MAX_TOKENS,
+            responseMimeType: "application/json"
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.candidates || data.candidates.length === 0) {
+        throw new Error('Invalid API response structure');
+      }
+
+      const content = data.candidates[0].content.parts[0].text;
+      const analysis = this.parseJSONResponse(content);
+      return this.validateAnalysis(analysis);
+    } catch (error) {
+      console.error('Gemini Analysis error:', error);
       throw error;
     }
   }
@@ -4960,9 +5131,9 @@ class LLMFreeProvider extends LLMProvider {
     return urls.filter(url => {
       const lowerUrl = url.toLowerCase();
       return !lowerUrl.includes('twitter.com') &&
-             !lowerUrl.includes('x.com') &&
-             !lowerUrl.includes('pbs.twimg.com') &&
-             !lowerUrl.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm|mov)$/i);
+        !lowerUrl.includes('x.com') &&
+        !lowerUrl.includes('pbs.twimg.com') &&
+        !lowerUrl.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm|mov)$/i);
     });
   };
 
@@ -5130,3 +5301,4 @@ Summary (3-5 bullet points):`;
 document.addEventListener('DOMContentLoaded', () => {
   new PopupController();
 });
+if (typeof module !== 'undefined' && module.exports) { module.exports = { PopupController, GeminiProvider, LLMProvider, OpenAIProvider, AnthropicProvider, LLMFreeProvider }; }

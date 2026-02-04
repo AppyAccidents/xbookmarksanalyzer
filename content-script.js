@@ -663,4 +663,4 @@ class XBookmarkScanner {
 }
 
 // Initialize the scanner
-new XBookmarkScanner();
+new XBookmarkScanner();if (typeof module !== 'undefined' && module.exports) { module.exports = { XBookmarkScanner }; }

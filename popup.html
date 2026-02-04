@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>X Bookmarks Extractor</title>
   <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
   <div class="container" id="popupRoot">
     <!-- Header -->
@@ -22,7 +24,8 @@
         <div id="status-bar" role="status" aria-live="polite"></div>
         <div id="extraction-status" role="status" aria-live="polite"></div>
         <div id="progress-container" class="progress-container" style="display: none;">
-          <div id="progress-bar" class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+          <div id="progress-bar" class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0"
+            aria-valuemax="100">
             <div class="progress-fill"></div>
           </div>
           <span id="progress-text" class="progress-text"></span>
@@ -32,7 +35,9 @@
       <!-- Main Actions -->
       <div class="action-group">
         <button id="bookmarksBtn" class="action-button">Go to Bookmarks Page</button>
-        <button id="autoScrollBtn" class="action-button" style="font-weight: 600; background: linear-gradient(135deg, #1d9bf0 0%, #0d7ac7 100%);">Scan All Bookmarks (Recommended)</button>
+        <button id="autoScrollBtn" class="action-button"
+          style="font-weight: 600; background: linear-gradient(135deg, #1d9bf0 0%, #0d7ac7 100%);">Scan All Bookmarks
+          (Recommended)</button>
         <button id="scanBtn" class="action-button" style="opacity: 0.7;">Quick Scan (Visible Only)</button>
       </div>
 
@@ -111,4 +116,5 @@
   </div>
   <script src="popup.js"></script>
 </body>
+
 </html>
