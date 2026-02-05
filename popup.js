@@ -48,7 +48,7 @@ class PopupController {
       bookmarkMetadata: {}, // { url: { read: bool, notes: string, customTags: [], favorite: bool, collection: string, archived: bool, highlights: [], readingPriority: 0 } }
       collections: [], // { id, name, color, bookmarkCount }
       savedSearches: [], // { id, name, query, filters }
-      viewMode: 'list', // 'list', 'grid', 'card'
+      viewMode: 'grid', // Enforced grid mode
       reminders: [], // { bookmarkUrl, reminderDate, message }
       // NEW FEATURES v0.11.0
       bulkSelection: [], // Array of selected bookmark URLs
@@ -105,7 +105,8 @@ class PopupController {
       mainContent: document.getElementById('mainContent'),
       closeBtn: document.getElementById('closeBtn'),
       settingsBtn: document.getElementById('settingsBtn'),
-      viewModeBtn: document.getElementById('viewModeBtn'),
+      // viewModeBtn removed
+      clearLibraryBtn: document.getElementById('clearLibraryBtn'),
       exportNotionBtn: document.getElementById('exportNotionBtn'),
       exportObsidianBtn: document.getElementById('exportObsidianBtn'),
       sentimentBtn: document.getElementById('sentimentBtn'),
@@ -299,6 +300,10 @@ class PopupController {
     if (settings.settings) {
       this.state.isDarkMode = settings.settings.darkMode || false;
       this.updateTheme();
+      // Sync toggle switch state
+      if (this.elements.darkModeToggle) {
+        this.elements.darkModeToggle.checked = this.state.isDarkMode;
+      }
     }
     if (settings.apiKey) {
       this.state.apiKey = settings.apiKey;
@@ -331,6 +336,58 @@ class PopupController {
     }
     if (settings.engagementHistory) {
       this.state.engagementHistory = settings.engagementHistory;
+    }
+
+    // Update Insights tab based on LLM provider
+    this.updateInsightsTab();
+  };
+
+  updateInsightsTab = () => {
+    const isLLMFree = this.state.llmProvider === 'none' || !this.state.apiKey;
+
+    // Update analyze button text and state
+    if (this.elements.analyzeAiBtn) {
+      if (isLLMFree) {
+        this.elements.analyzeAiBtn.textContent = 'Configure API Key to Analyze';
+        this.elements.analyzeAiBtn.disabled = true;
+      } else {
+        this.elements.analyzeAiBtn.textContent = 'Generate AI Report';
+        this.elements.analyzeAiBtn.disabled = false;
+      }
+    }
+
+    // Hide AI-specific buttons if in LLM-free mode
+    const aiOnlyButtons = [
+      this.elements.sentimentBtn,
+      this.elements.aiQABtn,
+      this.elements.hiddenGemsBtn,
+      this.elements.authorAnalyticsBtn
+    ];
+
+    aiOnlyButtons.forEach(btn => {
+      if (btn) {
+        btn.style.display = isLLMFree ? 'none' : '';
+      }
+    });
+
+    // Show info message in insights tab if LLM-free mode
+    const aiResultsContainer = document.getElementById('ai-results');
+    if (aiResultsContainer) {
+      // Remove existing notices
+      const existingNotice = aiResultsContainer.querySelector('.llm-free-notice');
+      if (existingNotice) existingNotice.remove();
+
+      if (isLLMFree) {
+        const notice = document.createElement('div');
+        notice.className = 'llm-free-notice';
+        notice.style.cssText = 'padding: 16px; background: var(--card-bg); border-radius: 8px; margin: 12px 16px; font-size: 13px; color: var(--text-secondary); text-align: center; border: 1px dashed var(--border-color);';
+        notice.innerHTML = `
+          <p style="margin: 0 0 8px 0; font-size: 24px;">🤖</p>
+          <p style="margin: 0; font-weight: 500;">AI Analysis Required</p>
+          <p style="margin: 8px 0 0;">Please ensure an API Key is configured in Settings to generate insights.</p>
+        `;
+        aiResultsContainer.prepend(notice);
+      }
     }
   };
 
@@ -465,11 +522,13 @@ class PopupController {
     });
     this.elements.filterBtn?.addEventListener('click', () => this.showFilterDialog());
     this.elements.sortBtn?.addEventListener('click', () => this.showSortDialog());
+    this.elements.clearLibraryBtn?.addEventListener('click', () => this.handleClearStorage());
     // Settings and close
     this.elements.closeBtn?.addEventListener('click', () => window.close());
     this.elements.settingsBtn?.addEventListener('click', () => this.showSettingsDialog());
 
-    this.elements.viewModeBtn?.addEventListener('click', () => this.toggleViewMode());
+    // View toggle removed
+    // this.elements.viewModeBtn?.addEventListener('click', () => this.toggleViewMode());
     this.elements.exportNotionBtn?.addEventListener('click', () => this.downloadNotion());
     this.elements.exportObsidianBtn?.addEventListener('click', () => this.downloadObsidian());
     this.elements.sentimentBtn?.addEventListener('click', () => this.showSentimentAnalysis());
@@ -681,6 +740,8 @@ class PopupController {
         }
 
         this.updateStatus('Stored bookmarks and analysis cleared');
+        this.state.filteredBookmarks = null;
+        this.renderLibrary(); // Force immediate UI clear
         this.updateUI();
       }
     );
@@ -693,6 +754,13 @@ class PopupController {
 
   handleScanComplete = async (bookmarks, performanceData, isQuickScan = false) => {
     this.state.lastExtraction = bookmarks;
+
+    // Reset filters and search so new bookmarks appear immediately
+    this.state.filteredBookmarks = null;
+    this.state.searchQuery = '';
+    if (this.elements.searchInput) {
+      this.elements.searchInput.value = '';
+    }
 
     // Store performance metrics
     if (performanceData) {
@@ -708,28 +776,42 @@ class PopupController {
       performanceMetrics: this.state.performanceMetrics
     });
 
-    this.updateStatus(`Successfully extracted ${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`);
+    this.updateStatus(`Successfully extracted ${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`, 'success');
 
     // Add helpful feedback for quick scans with few bookmarks
     if (isQuickScan && bookmarks.length < 20) {
-      this.updateStatus(`⚠️ Only ${bookmarks.length} visible bookmark${bookmarks.length !== 1 ? 's' : ''} scanned. Use "Scan All Bookmarks" to load and scan ALL your bookmarks!`);
+      this.updateStatus(`⚠️ Only ${bookmarks.length} visible bookmark${bookmarks.length !== 1 ? 's' : ''} scanned. Use "Scan All Bookmarks" to load and scan ALL your bookmarks!`, 'warning');
     }
 
     if (bookmarks.length > this.constants.MAX_SAFE_BOOKMARKS) {
-      this.updateStatus('Warning: Large bookmark set detected. Consider batch processing.');
+      this.updateStatus('Warning: Large bookmark set detected. Consider batch processing.', 'warning');
+    }
+
+    // Reset progress bar and scanning state
+    this.state.progress = { current: 0, total: 0 };
+    if (this.elements.progressBar) {
+      this.elements.progressBar.style.display = 'none';
+    }
+
+    // Reset scan button state
+    if (this.elements.autoScrollBtn) {
+      this.elements.autoScrollBtn.disabled = false;
+      const primaryText = this.elements.autoScrollBtn.querySelector('.primary-text');
+      if (primaryText) primaryText.textContent = 'Start Smart Scan';
     }
 
     this.updateUI();
 
-    // Switch to library tab to show results
-    this.switchTab('library');
+    // Switch to library tab to show results (delayed to ensure render completes)
+    setTimeout(() => {
+      this.switchTab('library');
+    }, 100);
 
     // Automatically analyze with AI if provider is configured and API key is set (or if using LLM-free mode)
+    // Automatically analyze with AI if provider is configured and API key is set
+    // NOTE: Free mode auto-analysis disabled per user request
     if (bookmarks.length > 0) {
-      if (this.state.llmProvider === 'none') {
-        // Auto-analyze with LLM-free mode
-        this.analyzeBookmarks();
-      } else if (this.state.apiKey && this.state.llmProvider !== 'none') {
+      if (this.state.apiKey && this.state.llmProvider !== 'none') {
         // Auto-analyze with configured LLM provider
         this.analyzeBookmarks();
       }
@@ -1758,6 +1840,7 @@ class PopupController {
     if (!query) {
       this.state.filteredBookmarks = null;
       this.updateStatus(`Showing all ${this.state.lastExtraction.length} bookmarks`);
+      this.renderLibrary();
       return;
     }
 
@@ -1770,6 +1853,7 @@ class PopupController {
     });
 
     this.updateStatus(`Found ${this.state.filteredBookmarks.length} bookmarks matching "${this.state.searchQuery}"`);
+    this.renderLibrary();
   };
 
   // Filter dialog
@@ -1858,8 +1942,16 @@ class PopupController {
     document.getElementById('cancelBtn').addEventListener('click', closeDialog);
     document.getElementById('resetBtn').addEventListener('click', () => {
       this.state.filterOptions = { minLikes: 0, minRetweets: 0, author: '', dateFrom: '', dateTo: '', readStatus: 'all', hasNotes: false, collections: [] };
-      this.state.filteredBookmarks = null;
-      this.updateStatus(`Showing all ${this.state.lastExtraction?.length || 0} bookmarks`);
+
+      // If there's a search query, re-run search with cleared filters
+      if (this.state.searchQuery) {
+        this.performSearch();
+      } else {
+        // Otherwise just show all
+        this.state.filteredBookmarks = null;
+        this.updateStatus(`Showing all ${this.state.lastExtraction?.length || 0} bookmarks`);
+        this.renderLibrary();
+      }
       closeDialog();
     });
 
@@ -1926,6 +2018,7 @@ class PopupController {
     });
 
     this.updateStatus(`Filtered to ${this.state.filteredBookmarks.length} bookmarks`);
+    this.renderLibrary();
   };
 
   // Performance metrics dialog
@@ -2972,16 +3065,7 @@ class PopupController {
     document.body.appendChild(dialog);
   };
 
-  // FEATURE: View Mode Toggle
-  toggleViewMode = async () => {
-    const modes = ['list', 'grid', 'card'];
-    const currentIndex = modes.indexOf(this.state.viewMode);
-    this.state.viewMode = modes[(currentIndex + 1) % modes.length];
-    await this.saveSettings();
-    this.updateStatus(`View mode: ${this.state.viewMode}`);
-  };
-
-  // FEATURE: Collections
+  // FEATURE: View  // View Toggle Removed - Enforced Grid
   createCollection = async (name, color = '#1DA1F2') => {
     const collection = {
       id: Date.now().toString(),

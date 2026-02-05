@@ -62,7 +62,8 @@
         <div class="toolbar">
           <input type="text" id="searchInput" placeholder="Search..." class="search-input">
           <button id="filterBtn" class="icon-only-btn" title="Filter"><span class="icon-filter"></span></button>
-          <button id="viewModeBtn" class="icon-only-btn" title="Toggle View"><span class="icon-grid"></span></button>
+          <button id="clearLibraryBtn" class="icon-only-btn danger-btn" title="Clear Library"><span
+              class="icon-trash"></span></button>
         </div>
 
         <div id="library-container" class="library-grid">
@@ -104,9 +105,9 @@
           <button id="clearStorageBtn" class="action-button danger">Clear All Data</button>
 
           <div class="export-options">
-            <h3>Advanced Exports</h3>
-            <button id="exportNotionBtn" class="action-button secondary" disabled>Notion CSV</button>
-            <button id="exportObsidianBtn" class="action-button secondary" disabled>Obsidian MD</button>
+            <h3>Data Management</h3>
+            <button id="exportNotionBtn" class="action-button secondary" disabled>Export CSV (Full)</button>
+            <button id="exportObsidianBtn" class="action-button secondary" disabled>Export JSON (Full)</button>
           </div>
         </div>
       </div>
