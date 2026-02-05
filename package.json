@@ -4,6 +4,9 @@
   "description": "![Version](https://img.shields.io/badge/version-0.12.3-blue.svg) ![Status](https://img.shields.io/badge/status-beta-yellow.svg)",
   "main": "background.js",
   "scripts": {
+    "build": "node esbuild.config.js",
+    "build:watch": "node esbuild.config.js --watch",
+    "build:prod": "node esbuild.config.js --prod",
     "test": "jest"
   },
   "repository": {
@@ -19,6 +22,7 @@
   },
   "homepage": "https://github.com/AppyAccidents/xbookmarksanalyzer#readme",
   "devDependencies": {
+    "esbuild": "^0.20.0",
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0"
   }
